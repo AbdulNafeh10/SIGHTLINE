@@ -95,7 +95,7 @@ def figures():
         ax.set_yticks([0, 180, 360])
         ax.set_ylim(-30, 390)
         ax.grid(axis="y", alpha=.18)
-    axes[0].set_title("Viewpoint sequences from a vehicle test", loc="left", pad=14)
+    axes[0].set_title("Matchbox Infiniti QX80 toy car: viewpoints", loc="left", pad=14)
     axes[-1].set_xticks(range(1, 6))
     axes[-1].set_xlabel("Photograph number")
     axes[-1].set_xlim(.8, 5.5)

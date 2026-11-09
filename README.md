@@ -50,11 +50,11 @@ Testing whether one model's selected views help another model is a separate comp
 
 ## Early observations
 
-An Infiniti QX80 model car gives a useful example of the images being captured and the differences between model responses.
+The example uses a Matchbox 2022 Infiniti QX80 toy car to show the images being captured and how the model responses change.
 
-<a href="evidence/images/matchbox_2022_infiniti_qx80_uniform_20261109_122226_746eb5_view_05_290.jpg"><img src="evidence/images/matchbox_2022_infiniti_qx80_uniform_20261109_122226_746eb5_view_05_290.jpg" alt="Infiniti QX80 model on the turntable" width="400"></a>
+<a href="evidence/images/matchbox_2022_infiniti_qx80_uniform_20261109_122226_746eb5_view_05_290.jpg"><img src="evidence/images/matchbox_2022_infiniti_qx80_uniform_20261109_122226_746eb5_view_05_290.jpg" alt="Matchbox Infiniti QX80 toy car on the turntable" width="400"></a>
 
-*Infiniti QX80 model on the turntable at 290°.*
+*Matchbox Infiniti QX80 toy car on the turntable at 290°.*
 
 The table follows the same uniform scan as each model received more photographs. A row with three photographs means the model saw views 1–3 together, not just the third image. The wording is taken from the [saved predictions](evidence/trials.csv).
 

@@ -80,9 +80,9 @@ A guided model receives only its own scan's photographs and their angles. Object
 
 Uniform and random images are evaluated by all three models. Each guided scan is currently evaluated by the model that selected its views. Evaluating those views with the other models will be a later experiment.
 
-![Viewpoint sequences from a vehicle test](assets/viewpoint-sequences.png)
+![Viewpoint sequences for the Matchbox Infiniti QX80 toy car](assets/viewpoint-sequences.png)
 
-*Viewpoints used in one vehicle test, with five photographs per strategy. Angles are turntable commands.*
+*Viewpoint sequences for the Matchbox Infiniti QX80 toy car. Five photographs per strategy; angles are turntable commands.*
 
 The [example images and records](../evidence) allow the predictions and view choices to be inspected together. `captures.csv` lists photographs and angles, `trials.csv` contains predictions, and the two API logs retain individual recognition and selection attempts. `provenance.json` records image checksums and the changes made to prepare the example, such as removing metadata and making paths portable.
 
