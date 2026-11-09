@@ -1,0 +1,133 @@
+"""Read-only local inventory and deterministic figures; never runs inference/hardware."""
+import argparse
+from collections import Counter, defaultdict
+import csv
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+MODELS = ["Qwen local", "Gemini cloud", "NVIDIA Nemotron"]
+OWNERS = dict(qwen_guided=MODELS[0], gemini_guided=MODELS[1], nvidia_guided=MODELS[2])
+METHODS = ["uniform", "random", *OWNERS]
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read_rows(path):
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8-sig", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+def inventory(root):
+    output = {"snapshot_date": datetime.now(timezone.utc).date().isoformat(), "workspaces": {}}
+    for name in ["study_data", "final_study_data"]:
+        base = root / name
+        objects = json.loads((base / "objects.json").read_text(encoding="utf-8-sig"))
+        captures = read_rows(base / "captures.csv")
+        evaluations = read_rows(base / "trials.csv")
+        selectors = read_rows(base / "selector_calls.csv")
+        attempts = read_rows(base / "evaluation_attempts.csv")
+        groups = defaultdict(list)
+        for row in captures:
+            groups[row["trial_id"]].append(row)
+        batch_methods = defaultdict(set)
+        complete = 0
+        expected = set()
+        for trial, rows in groups.items():
+            views = {int(r["view_number"]) for r in rows}
+            if views == set(range(1, 6)):
+                complete += 1
+                row = rows[0]
+                batch_methods[(row["object_id"], row.get("batch_id", ""))].add(row["method"])
+            for n in range(1, max(views) + 1):
+                if n not in views:
+                    break
+                method = rows[0]["method"]
+                models = [OWNERS[method]] if method in OWNERS else MODELS
+                expected.update((trial, str(n), m) for m in models)
+        latest = {(r["trial_id"], r["view_number"], r.get("model") or MODELS[0]): r for r in evaluations}
+        statuses = Counter((r.get("evaluation_status") or ("ok" if r.get("prediction") else "error")) for r in latest.values())
+        missing = bad_hash = 0
+        for row in captures:
+            # Read relocated copies without rewriting any manifest.
+            recorded = row["image_path"].replace("\\", "/")
+            suffix = recorded.split("images/", 1)[-1]
+            path = base / "images" / suffix
+            if not path.is_file():
+                missing += 1
+            elif row.get("sha256") and hashlib.sha256(path.read_bytes()).hexdigest() != row["sha256"]:
+                bad_hash += 1
+        completed_batches = sum(set(METHODS) <= methods for methods in batch_methods.values())
+        output["workspaces"][name] = dict(
+            registered_objects=len(objects), registered_ids_with_captures=len({r["object_id"] for r in captures}),
+            capture_rows=len(captures), retained_images=len(list((base / "images").rglob("*.jpg"))),
+            captured_trials=len(groups), five_view_trials=complete, five_strategy_capture_batches=completed_batches,
+            evaluation_rows=len(evaluations), unique_evaluation_keys=len(latest), latest_statuses=dict(statuses),
+            never_attempted_checkpoints=len(expected - set(latest)), expected_checkpoints=len(expected),
+            selector_attempts=len(selectors), selector_statuses=dict(Counter(r["status"] for r in selectors)),
+            recognition_attempt_rows=len(attempts), manual_review_file_present=(base / "reviews.json").exists(),
+            missing_images=missing, checksum_mismatches=bad_hash,
+            duplicate_capture_keys=len(captures)-len({(r["trial_id"],r["view_number"]) for r in captures}),
+            source_sha256={p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                           for p in sorted(base.glob("*")) if p.suffix in (".csv", ".json", ".jsonl")},
+        )
+    return output
+
+
+def figures():
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    summary = json.loads((ROOT / "evidence" / "inventory.json").read_text())
+    research = summary["workspaces"]["final_study_data"]
+    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
+    fig, ax = plt.subplots(figsize=(8, 3.2), layout="constrained")
+    labels = ["Registered object IDs", "IDs with captures", "Five-strategy capture batches"]
+    values = [research["registered_objects"], research["registered_ids_with_captures"], research["five_strategy_capture_batches"]]
+    bars = ax.barh(labels[::-1], values[::-1], color=["#407c80", "#759da4", "#b4c9cd"])
+    ax.bar_label(bars, padding=5)
+    ax.set_xlim(0, 23)
+    ax.set_xlabel("Recorded count; collection coverage only")
+    ax.set_title("Research workspace at pause", loc="left")
+    fig.savefig(ROOT / "docs" / "assets" / "collection-coverage.png", dpi=180)
+    plt.close(fig)
+    captures = read_rows(ROOT / "evidence" / "captures.csv")
+    fig, axes = plt.subplots(5, 1, figsize=(8, 7), sharex=True, sharey=True, layout="constrained")
+    names = ["Uniform", "Random", "Qwen-guided", "Gemini-guided", "NVIDIA-guided"]
+    for ax, method, name in zip(axes, METHODS, names):
+        rows = sorted([r for r in captures if r["method"] == method], key=lambda r: int(r["view_number"]))
+        x = [int(r["view_number"]) for r in rows]
+        y = [int(r["angle"]) for r in rows]
+        ax.plot(x, y, marker="o", color="#245d70", linewidth=1.5)
+        for a, b in zip(x, y):
+            ax.annotate(f"{b}°", (a, b), xytext=(7, 6), textcoords="offset points", fontsize=9)
+        ax.set_ylabel(name, rotation=0, ha="right", va="center")
+        ax.set_yticks([0, 180, 360])
+        ax.set_ylim(-30, 390)
+        ax.grid(axis="y", alpha=.18)
+    axes[0].set_title("One vehicle batch: commanded viewpoint sequences", loc="left", pad=14)
+    axes[-1].set_xticks(range(1, 6))
+    axes[-1].set_xlabel("Photograph number (joined points show order, not continuous travel)")
+    axes[-1].set_xlim(.8, 5.5)
+    fig.savefig(ROOT / "docs" / "assets" / "viewpoint-sequences.png", dpi=180)
+    plt.close(fig)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    audit = sub.add_parser("audit")
+    audit.add_argument("root", type=Path)
+    audit.add_argument("--output", type=Path)
+    sub.add_parser("figures")
+    args = parser.parse_args()
+    if args.command == "figures":
+        figures()
+    else:
+        result = json.dumps(inventory(args.root), indent=2) + "\n"
+        if args.output:
+            args.output.write_text(result, encoding="utf-8")
+        else:
+            print(result)

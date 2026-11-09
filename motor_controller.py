@@ -19,12 +19,19 @@ BAUD_RATE = 9600
 def connect(port=PORT):
     """Open Arduino's serial port and allow its automatic reset to finish."""
     arduino = serial.Serial(port, BAUD_RATE, timeout=1, write_timeout=5)
-    time.sleep(2)
-    # Drain anything emitted during boot, including 'SIGHTLINE READY'.
-    while arduino.in_waiting:
-        line = arduino.readline().decode(errors="replace").strip()
-        if line:
-            print(f"Arduino: {line}")
+    try:
+        time.sleep(2)
+        # Bound boot draining even if a faulty device continuously emits text.
+        deadline = time.monotonic() + 5
+        while arduino.in_waiting:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Arduino boot output did not settle")
+            line = arduino.readline().decode(errors="replace").strip()
+            if line:
+                print(f"Arduino: {line}")
+    except BaseException:
+        arduino.close()
+        raise
     return arduino
 
 

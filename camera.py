@@ -8,23 +8,19 @@ class Camera:
         # Plugcam virtual camera (DirectShow)
         self.cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
 
-        if not self.cap.isOpened():
-            raise RuntimeError("Could not open Plugcam camera")
-
-        # Request 1440p resolution
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
-
-        print("SIGHTLINE Plugcam connected")
-
-        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-
-        print(f"Camera resolution: {int(width)} x {int(height)}")
-
-        # Allow Plugcam to initialize
-        print("Waiting for camera to initialize...")
-        time.sleep(5)
+        try:
+            if not self.cap.isOpened():
+                raise RuntimeError("Could not open Plugcam camera")
+            # A request is not proof of the delivered resolution.
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 2560)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1440)
+            width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            print(f"SIGHTLINE camera {index}: reported {int(width)} x {int(height)}")
+            time.sleep(5)
+        except BaseException:
+            self.cap.release()
+            raise
 
     def capture(self, filename):
         frame = None

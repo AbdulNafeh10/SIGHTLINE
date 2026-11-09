@@ -26,6 +26,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, cast
 
 import altair as alt
 import cv2
@@ -34,8 +35,9 @@ import streamlit as st
 from openai import OpenAI
 
 ROOT = Path(__file__).resolve().parent
-PHASE_ROOTS = {"Testing": ROOT / "study_data", "Research": ROOT / "final_study_data"}
-LOCAL_ENDPOINT = "http://127.0.0.1:9931/v1"
+DATA_ROOT = Path(os.getenv("SIGHTLINE_DATA_ROOT", str(ROOT))).expanduser().resolve()
+PHASE_ROOTS = {"Testing": DATA_ROOT / "study_data", "Research": DATA_ROOT / "final_study_data"}
+LOCAL_ENDPOINT = os.getenv("SIGHTLINE_LOCAL_ENDPOINT", "http://127.0.0.1:9931/v1")
 NVIDIA_ENDPOINT = "https://integrate.api.nvidia.com/v1"
 MODEL_IDS = {
     "Qwen local": "Qwen3-VL-4B-Instruct",
@@ -105,14 +107,14 @@ CAPTURE_COLUMNS = [
     "selection_seconds", "capture_seconds", "camera_index", "view_budget", "random_seed",
     "selection_model", "selection_model_id", "selection_status", "selection_attempts",
     "selection_prompt_tokens", "selection_completion_tokens", "selection_total_tokens",
-    "selection_input_sha256", "selection_prompt_version", "selection_raw",
+    "selection_input_sha256", "selection_prompt_version", "selection_raw", "request_config",
 ]
 SELECTOR_COLUMNS = [
     "timestamp", "phase", "batch_id", "object_id", "trial_id", "method",
     "model", "model_id", "view_number", "observed_angles", "candidate_count",
     "request_attempt", "status", "suggested_angle", "reason", "response_raw",
     "error_type", "error_message", "duration_seconds", "prompt_tokens",
-    "completion_tokens", "total_tokens", "input_sha256", "selector_prompt_version",
+    "completion_tokens", "total_tokens", "input_sha256", "selector_prompt_version", "request_config",
 ]
 TRIAL_COLUMNS = [
     "timestamp", "phase", "batch_id", "object_id", "trial_id", "method", "model", "model_id",
@@ -122,14 +124,14 @@ TRIAL_COLUMNS = [
     "confidence_reported", "correct", "evaluation_status", "error_type", "error_message",
     "evaluation_seconds", "request_attempts", "prompt_tokens", "completion_tokens",
     "total_tokens", "input_max_width", "input_max_height", "jpeg_quality",
-    "input_sha256", "recognition_prompt_version", "response_raw", "notes", "evaluation_id",
+    "input_sha256", "recognition_prompt_version", "response_raw", "notes", "evaluation_id", "request_config",
 ]
 EVALUATION_ATTEMPT_COLUMNS = [
     "timestamp", "phase", "batch_id", "object_id", "trial_id", "method",
     "model", "model_id", "view_number", "attempt", "status",
     "duration_seconds", "input_sha256", "recognition_prompt_version",
     "prompt_tokens", "completion_tokens", "total_tokens",
-    "error_type", "error_message", "response_raw",
+    "error_type", "error_message", "response_raw", "evaluation_id", "request_config",
 ]
 # Legacy predictions.csv is left intact; trials.csv stores the final result per evaluation.
 # evaluation_attempts.csv additionally saves every individual API attempt.
@@ -160,8 +162,8 @@ def load_json(path, default):
         return default
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return default
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"Cannot read {path.name}; preserve the file and restore a backup") from exc
 
 
 def append_csv(path, columns, row):
@@ -174,7 +176,7 @@ def append_csv(path, columns, row):
             original = list(csv.DictReader(path.open(encoding="utf-8-sig", newline="")))
             backup = path.with_name(path.name + ".backup_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
             shutil.copy2(path, backup)
-            merged = list(dict.fromkeys(old_fields + missing))
+            merged = list(dict.fromkeys(list(old_fields) + missing))
             tmp = path.with_name(path.name + ".migrating")
             with tmp.open("w", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=merged, extrasaction="ignore")
@@ -200,8 +202,8 @@ def read_csv(path, columns):
         return pd.DataFrame(columns=columns)
     try:
         df = pd.read_csv(path, keep_default_na=False, dtype=str, encoding="utf-8-sig")
-    except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError):
-        return pd.DataFrame(columns=columns)
+    except (pd.errors.EmptyDataError, pd.errors.ParserError, OSError) as exc:
+        raise RuntimeError(f"Cannot read {path.name}; preserve the file and restore a backup") from exc
     for column in columns:
         if column not in df:
             df[column] = ""
@@ -253,6 +255,25 @@ def image_checksum(image_path):
     return digest.hexdigest()
 
 
+def resolve_capture_path(value, paths):
+    """Resolve portable captures and relocated legacy paths without editing records."""
+    original = Path(str(value))
+    workspace = paths["captures"].parent.resolve()
+    image_root = (workspace / "images").resolve()
+    normalized = str(value).replace("\\", "/")
+    parts = normalized.split("/")
+    # Prefer this workspace over an old absolute path that still exists elsewhere.
+    if "images" in parts:
+        suffix = parts[parts.index("images") + 1:]
+        relocated = image_root.joinpath(*suffix).resolve()
+        if relocated.is_relative_to(image_root) and relocated.is_file():
+            return relocated
+    local = (workspace / original).resolve() if not original.is_absolute() else original.resolve()
+    if local.is_relative_to(image_root) and local.is_file():
+        return local
+    raise FileNotFoundError(f"Capture missing from this workspace: {original.name}")
+
+
 def prepared_jpeg(path):
     """Never changes the captured original; identical JPEG bytes sent to all models."""
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
@@ -294,7 +315,15 @@ def parse_recognition(raw):
                 obj = json.loads(match.group())
             except ValueError:
                 pass
-    if not isinstance(obj, dict) or not str(obj.get("prediction") or "").strip():
+    required = {"prediction", "category", "brand", "product_family", "model",
+                "evidence", "uncertainties", "confidence"}
+    valid = (isinstance(obj, dict) and required <= obj.keys()
+             and all(isinstance(obj.get(k), str) for k in ("prediction", "category", "evidence", "uncertainties"))
+             and bool(obj.get("prediction", "").strip())
+             and all(obj.get(k) is None or isinstance(obj.get(k), str) for k in ("brand", "product_family", "model"))
+             and (obj.get("confidence") is None or (type(obj.get("confidence")) in (int, float)
+                  and 0 <= obj["confidence"] <= 1)))
+    if not valid:
         # Store full output for later human/assistant review; a readable fallback
         # label helps display but remains explicitly 'unstructured'.
         match = re.search(r"(?:object type|object)\s*:\s*(.+)", cleaned, re.I)
@@ -324,7 +353,7 @@ def parse_recognition(raw):
 def is_retryable(exc):
     code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     try:
-        if int(code) in (408, 409, 429, 500, 502, 503, 504):
+        if code is not None and int(code) in (408, 409, 429, 500, 502, 503, 504):
             return True
     except (ValueError, TypeError):
         pass
@@ -353,7 +382,8 @@ def call_vision(model_name, blobs, clients, prompt, max_tokens=450):
         ]
         response = clients[model_name].models.generate_content(
             model=MODEL_IDS[model_name], contents=parts,
-            config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json"))
+            config=types.GenerateContentConfig(temperature=0, response_mime_type="application/json",
+                                               max_output_tokens=max_tokens))
         raw = response.text or ""
         usage = getattr(response, "usage_metadata", None)
         token_counts = (
@@ -383,6 +413,18 @@ def call_vision(model_name, blobs, clients, prompt, max_tokens=450):
 
 def call_model(model_name, blobs, clients):
     return call_vision(model_name, blobs, clients, RECOGNITION_PROMPT, 450)
+
+
+def request_config(model_name, prompt, max_tokens):
+    """Record requested settings; this does not attest to hosted model weights."""
+    config = dict(model_id=MODEL_IDS[model_name], temperature=0,
+                  max_output_tokens=max_tokens, sdk_retries=0, timeout_seconds=120,
+                  prompt_sha256=hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                  opencv_version=cv2.__version__, jpeg_quality=JPEG_QUALITY,
+                  max_width=MAX_WIDTH, max_height=MAX_HEIGHT)
+    if model_name == "NVIDIA Nemotron":
+        config.update(temperature=0.6, top_p=0.95, enable_thinking=False)
+    return json.dumps(config, sort_keys=True)
 
 
 def models_for_method(method):
@@ -473,6 +515,7 @@ def select_angle(paths, metadata, guide_model, seen, images, clients, progress):
             duration_seconds=round(time.perf_counter() - started, 2),
             prompt_tokens=usage[0], completion_tokens=usage[1], total_tokens=usage[2],
             input_sha256=fingerprint, selector_prompt_version=SELECTOR_PROMPT_VERSION,
+            request_config=request_config(guide_model, prompt, 280),
         )
         append_csv(paths["selectors"], SELECTOR_COLUMNS, row)
         if status == "ok":
@@ -516,10 +559,19 @@ def init_clients(selected):
                 try:
                     from google import genai
                     from google.genai import types
-                    clients[model_name] = genai.Client(http_options=types.HttpOptions(timeout=120000))
+                    clients[model_name] = genai.Client(http_options=types.HttpOptions(
+                        timeout=120000, retry_options=types.HttpRetryOptions(attempts=1)))
                 except Exception as exc:
                     problems[model_name] = f"Gemini client setup failed: {type(exc).__name__}: {exc}"
     return clients, problems
+
+
+def close_clients(clients):
+    for client in clients.values():
+        try:
+            client.close()
+        except Exception:
+            pass  # Cleanup must not hide the original acquisition/API error.
 
 
 def select_fallback(available, observed):
@@ -558,6 +610,7 @@ def capture_method(paths, phase, object_id, method, budget, camera_index, batch_
     uniform = uniform_angles(budget)
     camera = arduino = None
     angle_now = 0
+    position_known = True
     observed, images = [], []
     succeeded = False
     try:
@@ -597,7 +650,9 @@ def capture_method(paths, phase, object_id, method, budget, camera_index, batch_
                         selection_fingerprint = selection["fingerprint"]
             if chosen != angle_now:
                 set_status(arduino, "ROTATING")
+                position_known = False  # A lost DONE reply may follow physical movement.
                 angle_now = rotate_to(arduino, angle_now, chosen)
+                position_known = True
             set_status(arduino, "CAPTURING")
             photo = directory / f"{trial_id}_view_{i+1:02d}_{chosen:03d}.jpg"
             started = time.perf_counter()
@@ -612,7 +667,7 @@ def capture_method(paths, phase, object_id, method, budget, camera_index, batch_
             record = dict(
                 timestamp=utc_now(), phase=phase, batch_id=batch_id, object_id=object_id,
                 trial_id=trial_id, method=method, view_number=i + 1, angle=chosen,
-                image_path=str(photo), sha256=image_checksum(photo),
+                image_path=photo.relative_to(paths["captures"].parent).as_posix(), sha256=image_checksum(photo),
                 photo_width=photo_width, photo_height=photo_height,
                 selection_source=selection_source, selection_reason=reason,
                 selection_seconds=round(select_sec, 3), capture_seconds=round(capture_sec, 3),
@@ -625,6 +680,7 @@ def capture_method(paths, phase, object_id, method, budget, camera_index, batch_
                 selection_input_sha256=selection_fingerprint,
                 selection_prompt_version=SELECTOR_PROMPT_VERSION if guide_model else "",
                 selection_raw=selection_raw,
+                request_config=request_config(guide_model, selector_prompt(observed, [a for a in CANDIDATES if a not in observed]), 280) if guide_model and i else "",
             )
             append_csv(paths["captures"], CAPTURE_COLUMNS, record)
             images.append(photo)
@@ -639,7 +695,10 @@ def capture_method(paths, phase, object_id, method, budget, camera_index, batch_
                 progress.warning(f"Camera release warning: {err}")
         if arduino:
             try:
-                if angle_now:
+                if not position_known:
+                    succeeded = False
+                    progress.warning("Rotation was not acknowledged. Position is unknown; no automatic return was attempted. Physically realign to 0°.")
+                elif angle_now:
                     set_status(arduino, "RETURNING HOME")
                     rotate_to(arduino, angle_now, 0)
                 set_status(arduino, "SIGHTLINE READY" if succeeded else "SCAN ERROR")
@@ -652,6 +711,7 @@ def capture_method(paths, phase, object_id, method, budget, camera_index, batch_
                     arduino.close()
                 except Exception:
                     pass
+        close_clients(clients)
     if not succeeded:
         raise RuntimeError("Scan or return-home failed; verify the platform is at 0°. Saved photos were preserved.")
     return trial_id
@@ -751,87 +811,96 @@ def evaluate_saved(paths, phase, selected_models, retry_errors, trial_filter, pr
     # Same pacing for recognition and viewpoint-selection calls.
     # The quotas are not guarantees of server availability.
     prefix_cache = {}  # image hashes prepared once per checkpoint, reused across models
-    for index, (model, prefix) in enumerate(jobs, start=1):
-        last = prefix[-1]
-        label = f"{model} · {last['method']} · {len(prefix)} photos ({index}/{len(jobs)})"
-        progress.info(f"Evaluating {label}")
-        images = [r["image_path"] for r in prefix]
-        base = dict(
-            timestamp=utc_now(), phase=phase, batch_id=last.get("batch_id", ""),
-            object_id=last["object_id"], trial_id=last["trial_id"], method=last["method"],
-            model=model, model_id=MODEL_IDS[model], view_number=len(prefix), view_count=len(prefix),
-            angle=last["angle"], image_path=last["image_path"],
-            selection_source=last["selection_source"], selection_reason=last["selection_reason"],
-            selection_seconds=last["selection_seconds"], capture_seconds=last["capture_seconds"],
-            camera_index=last["camera_index"], view_budget=last["view_budget"],
-            recognition_prompt_version=PROMPT_VERSION, input_max_width=MAX_WIDTH,
-            input_max_height=MAX_HEIGHT, jpeg_quality=JPEG_QUALITY,
-            evaluation_id=uuid.uuid4().hex, notes="Raw prediction retained; scoring requires review",
-        )
-        if model in setup_problems:
-            record = dict(base, evaluation_status="blocked", error_type="MissingSetup",
-                          error_message=setup_problems[model], request_attempts=0)
-            append_csv(paths["trials"], TRIAL_COLUMNS, record)
-            counts["blocked"] += 1
-            continue
-        started = time.perf_counter()
-        attempts = 0
-        record = {}
-        try:
-            key = tuple(images)
-            if key not in prefix_cache:
-                # Keep memory bounded during 20+ object collection sessions.
-                if len(prefix_cache) >= 8:
-                    prefix_cache.clear()
-                prefix_cache[key] = prepared_prefix(images)
-            blobs, fingerprint = prefix_cache[key]
-            base["input_sha256"] = fingerprint
-            for attempt in range(1, 4):
-                attempts = attempt
-                attempt_started = time.perf_counter()
-                try:
-                    pace_request(model)
-                    raw, usage = call_model(model, blobs, clients)
-                    prediction = parse_recognition(raw)
-                    append_csv(paths["evaluation_attempts"], EVALUATION_ATTEMPT_COLUMNS,
-                               dict(timestamp=utc_now(), phase=phase, batch_id=last.get("batch_id", ""),
-                                    object_id=last["object_id"], trial_id=last["trial_id"],
-                                    method=last["method"], model=model, model_id=MODEL_IDS[model],
-                                    view_number=len(prefix), attempt=attempt,
-                                    status=prediction["evaluation_status"],
-                                    duration_seconds=round(time.perf_counter()-attempt_started, 3),
-                                    input_sha256=fingerprint, recognition_prompt_version=PROMPT_VERSION,
-                                    prompt_tokens=usage[0], completion_tokens=usage[1], total_tokens=usage[2],
-                                    response_raw=raw))
-                    record = dict(base, **prediction, response_raw=raw,
-                                  prompt_tokens=usage[0], completion_tokens=usage[1],
-                                  total_tokens=usage[2], request_attempts=attempts)
-                    counts[record["evaluation_status"]] += 1
-                    break
-                except Exception as exc:
-                    append_csv(paths["evaluation_attempts"], EVALUATION_ATTEMPT_COLUMNS,
-                               dict(timestamp=utc_now(), phase=phase, batch_id=last.get("batch_id", ""),
-                                    object_id=last["object_id"], trial_id=last["trial_id"],
-                                    method=last["method"], model=model, model_id=MODEL_IDS[model],
-                                    view_number=len(prefix), attempt=attempt, status="error",
-                                    duration_seconds=round(time.perf_counter()-attempt_started, 3),
-                                    input_sha256=fingerprint, recognition_prompt_version=PROMPT_VERSION,
-                                    error_type=type(exc).__name__, error_message=safe_error(exc)))
-                    if attempt == 3 or not is_retryable(exc):
-                        record = dict(base, evaluation_status="error", error_type=type(exc).__name__,
-                                      error_message=safe_error(exc), request_attempts=attempts)
-                        counts["error"] += 1
+    try:
+        for index, (model, prefix) in enumerate(jobs, start=1):
+            last = prefix[-1]
+            label = f"{model} · {last['method']} · {len(prefix)} photos ({index}/{len(jobs)})"
+            progress.info(f"Evaluating {label}")
+            base = dict(
+                timestamp=utc_now(), phase=phase, batch_id=last.get("batch_id", ""),
+                object_id=last["object_id"], trial_id=last["trial_id"], method=last["method"],
+                model=model, model_id=MODEL_IDS[model], view_number=len(prefix), view_count=len(prefix),
+                angle=last["angle"], image_path=last["image_path"],
+                selection_source=last["selection_source"], selection_reason=last["selection_reason"],
+                selection_seconds=last["selection_seconds"], capture_seconds=last["capture_seconds"],
+                camera_index=last["camera_index"], view_budget=last["view_budget"],
+                recognition_prompt_version=PROMPT_VERSION, input_max_width=MAX_WIDTH,
+                input_max_height=MAX_HEIGHT, jpeg_quality=JPEG_QUALITY,
+                evaluation_id=uuid.uuid4().hex, notes="Raw prediction retained; scoring requires review",
+                request_config=request_config(model, RECOGNITION_PROMPT, 450),
+            )
+            if model in setup_problems:
+                record = dict(base, evaluation_status="blocked", error_type="MissingSetup",
+                              error_message=setup_problems[model], request_attempts=0)
+                append_csv(paths["trials"], TRIAL_COLUMNS, record)
+                counts["blocked"] += 1
+                continue
+            started = time.perf_counter()
+            attempts = 0
+            record = {}
+            try:
+                images = [resolve_capture_path(r["image_path"], paths) for r in prefix]
+                for record, image in zip(prefix, images):
+                    if record.get("sha256") and image_checksum(image) != record["sha256"]:
+                        raise ValueError("Capture checksum differs from its manifest; inference stopped")
+                key = tuple(images)
+                if key not in prefix_cache:
+                    # Keep memory bounded during 20+ object collection sessions.
+                    if len(prefix_cache) >= 8:
+                        prefix_cache.clear()
+                    prefix_cache[key] = prepared_prefix(images)
+                blobs, fingerprint = prefix_cache[key]
+                base["input_sha256"] = fingerprint
+                for attempt in range(1, 4):
+                    attempts = attempt
+                    attempt_started = time.perf_counter()
+                    try:
+                        pace_request(model)
+                        raw, usage = call_model(model, blobs, clients)
+                        prediction = parse_recognition(raw)
+                        append_csv(paths["evaluation_attempts"], EVALUATION_ATTEMPT_COLUMNS,
+                                   dict(timestamp=utc_now(), phase=phase, batch_id=last.get("batch_id", ""),
+                                        object_id=last["object_id"], trial_id=last["trial_id"],
+                                        method=last["method"], model=model, model_id=MODEL_IDS[model],
+                                        view_number=len(prefix), attempt=attempt,
+                                        evaluation_id=base["evaluation_id"], request_config=base["request_config"],
+                                        status=prediction["evaluation_status"],
+                                        duration_seconds=round(time.perf_counter()-attempt_started, 3),
+                                        input_sha256=fingerprint, recognition_prompt_version=PROMPT_VERSION,
+                                        prompt_tokens=usage[0], completion_tokens=usage[1], total_tokens=usage[2],
+                                        response_raw=raw))
+                        record = dict(base, **prediction, response_raw=raw,
+                                      prompt_tokens=usage[0], completion_tokens=usage[1],
+                                      total_tokens=usage[2], request_attempts=attempts)
+                        counts[record["evaluation_status"]] += 1
                         break
-                    # Limited backoff, no nested SDK retries. No automatic quota grinding.
-                    time.sleep(min(2 ** attempt + random.uniform(0, 0.5), 10))
-        except Exception as exc:
-            record = dict(base, evaluation_status="error", error_type=type(exc).__name__,
-                          error_message=safe_error(exc), request_attempts=attempts)
-            counts["error"] += 1
-        record["evaluation_seconds"] = round(time.perf_counter() - started, 2)
-        append_csv(paths["trials"], TRIAL_COLUMNS, record)
-        if record.get("evaluation_status") != "ok":
-            progress.warning(f"{label}: {record.get('evaluation_status')} — {record.get('error_message') or 'raw response saved for review'}")
+                    except Exception as exc:
+                        append_csv(paths["evaluation_attempts"], EVALUATION_ATTEMPT_COLUMNS,
+                                   dict(timestamp=utc_now(), phase=phase, batch_id=last.get("batch_id", ""),
+                                        object_id=last["object_id"], trial_id=last["trial_id"],
+                                        method=last["method"], model=model, model_id=MODEL_IDS[model],
+                                        view_number=len(prefix), attempt=attempt, status="error",
+                                        evaluation_id=base["evaluation_id"], request_config=base["request_config"],
+                                        duration_seconds=round(time.perf_counter()-attempt_started, 3),
+                                        input_sha256=fingerprint, recognition_prompt_version=PROMPT_VERSION,
+                                        error_type=type(exc).__name__, error_message=safe_error(exc)))
+                        if attempt == 3 or not is_retryable(exc):
+                            record = dict(base, evaluation_status="error", error_type=type(exc).__name__,
+                                          error_message=safe_error(exc), request_attempts=attempts)
+                            counts["error"] += 1
+                            break
+                        # Limited backoff, no nested SDK retries. No automatic quota grinding.
+                        time.sleep(min(2 ** attempt + random.uniform(0, 0.5), 10))
+            except Exception as exc:
+                record = dict(base, evaluation_status="error", error_type=type(exc).__name__,
+                              error_message=safe_error(exc), request_attempts=attempts)
+                counts["error"] += 1
+            record["evaluation_seconds"] = round(time.perf_counter() - started, 2)
+            append_csv(paths["trials"], TRIAL_COLUMNS, record)
+            if record.get("evaluation_status") != "ok":
+                progress.warning(f"{label}: {record.get('evaluation_status')} — {record.get('error_message') or 'raw response saved for review'}")
+    finally:
+        close_clients(clients)
     return counts, len(jobs)
 
 
@@ -903,44 +972,11 @@ def scored_latest(evals, objects, reviews):
     return df
 
 
-def remove_trials(paths, trial_ids):
-    """Explicit deletion only. Never wipe study_data when starting final_study_data."""
-    trial_ids = set(str(i) for i in trial_ids)
-    if not trial_ids:
-        return
-    captures = read_csv(paths["captures"], CAPTURE_COLUMNS)
-    target = captures[captures.trial_id.isin(trial_ids)]
-    allowed = (paths["captures"].parent / "images").resolve()
-    for photo in target.image_path:
-        try:
-            path = Path(photo).resolve()
-            if path.is_relative_to(allowed) and path.is_file():
-                path.unlink()
-        except (OSError, ValueError):
-            pass
-    for name, columns in (("captures", CAPTURE_COLUMNS), ("trials", TRIAL_COLUMNS),
-                          ("selectors", SELECTOR_COLUMNS)):
-        path = paths[name]
-        if not path.exists():
-            continue
-        df = read_csv(path, columns)
-        original_fields = list(df.columns)
-        df = df[~df.trial_id.isin(trial_ids)]
-        tmp = path.with_name(path.name + ".deleting")
-        df.to_csv(tmp, columns=original_fields, index=False)
-        os.replace(tmp, path)
-    reviews = load_reviews(paths)
-    for k in list(reviews):
-        if k.split("::")[0] in trial_ids:
-            del reviews[k]
-    atomic_json(paths["reviews"], reviews)
-
-
 def export_csv(df):
     return df.to_csv(index=False).encode("utf-8-sig")
 
 
-def graph_panel(df, value_column, title, model, split_offsets, color_domain=None):
+def graph_panel(df, value_column, title, model):
     sub = df[df["model"].eq(model)].copy()
     allowed = ("uniform", "random", GUIDED_METHODS[model], "ai_guided")
     sub = sub[sub.method.isin(allowed)]
@@ -951,33 +987,12 @@ def graph_panel(df, value_column, title, model, split_offsets, color_domain=None
     # Include count in tooltips; a mean across one object is exploratory, not evidence.
     sub = sub.groupby(["method", "view_number"], as_index=False).agg(
         **{value_column: (value_column, "mean")}, sample_size=(value_column, "count"))
-    shifts = {"uniform": -0.12, "random": 0.0,
-              GUIDED_METHODS[model]: 0.12, "ai_guided": 0.24} if split_offsets else {}
-    sub["display_x"] = sub.apply(lambda r: float(r["view_number"]) + shifts.get(r["method"], 0.0), axis=1)
-    # Shifting only X would still completely hide overlapping horizontal lines.
-    # Apply a *tiny visible Y separation ONLY at equal-value checkpoints*, with
-    # the TRUE scores retained in value_column and displayed in tooltips/exports.
-    sub["display_y"] = sub[value_column].copy()
-    if split_offsets:
-        for view, rows in sub.groupby("view_number"):
-            # Round ONLY to group visually indistinguishable points; actual data stays intact.
-            for _, equal_rows in rows.groupby(rows[value_column].round(3)):
-                equal_rows = equal_rows.sort_values("method")
-                if len(equal_rows) < 2:
-                    continue
-                base = float(equal_rows[value_column].mean())
-                offsets = [(i - (len(equal_rows) - 1) / 2) * 0.025 for i in range(len(equal_rows))]
-                # Stay inside the 0-1 chart at perfect 0 and 1.
-                if base + min(offsets) < 0:
-                    offsets = [o - (base + min(offsets)) for o in offsets]
-                elif base + max(offsets) > 1:
-                    offsets = [o + (1 - base - max(offsets)) for o in offsets]
-                for idx, off in zip(equal_rows.index, offsets):
-                    sub.loc[idx, "display_y"] = min(1.0, max(0.0, float(sub.loc[idx, value_column]) + off))
+    sub["display_x"] = pd.to_numeric(sub["view_number"])
+    sub["display_y"] = sub[value_column]
     sub["strategy"] = sub.method.map(METHOD_NAMES)
     strategy_order = [METHOD_NAMES[m] for m in allowed if m in set(sub.method)]
     max_photos = max(5, int(sub.view_number.max()))
-    enc = dict(
+    enc: dict[str, Any] = dict(
         x=alt.X("display_x:Q", title="Number of photographs",
                 scale=alt.Scale(domain=[0.6, max_photos + 0.5]),
                 axis=alt.Axis(values=list(range(1, max_photos + 1)), format="d")),
@@ -989,22 +1004,21 @@ def graph_panel(df, value_column, title, model, split_offsets, color_domain=None
                  alt.Tooltip(f"{value_column}:Q", title=title, format=".2f"),
                  alt.Tooltip("sample_size:Q", title="Evaluations", format="d")],
     )
-    line = alt.Chart(sub).mark_line(strokeWidth=2.7).encode(**enc)
-    dots = alt.Chart(sub).mark_point(filled=True, size=120, stroke="white", strokeWidth=1.1).encode(**enc)
+    line = cast(alt.Chart, alt.Chart(sub).encode(**enc).mark_line(strokeWidth=2.7))
+    dots = cast(alt.Chart, alt.Chart(sub).encode(
+        **enc, shape=alt.Shape("strategy:N", title="Strategy marker", sort=strategy_order)
+    ).mark_point(filled=False, size=120, strokeWidth=1.8))
     return (line + dots).properties(title=model, height=240)
 
 
-def render_graph(df, value, y_title, offset=True):
-    panels = [p for model in MODEL_ORDER if (p := graph_panel(df, value, y_title, model, offset)) is not None]
+def render_graph(df, value, y_title):
+    panels = [p for model in MODEL_ORDER if (p := graph_panel(df, value, y_title, model)) is not None]
     if not panels:
         st.info("No data for this graph yet.")
     else:
         # Each model gets its own panel: fewer hidden overlaps, clearer comparisons.
-        st.altair_chart(alt.vconcat(*panels).resolve_scale(color="shared"), use_container_width=True)
-        if offset:
-            st.caption("Identical scores are separated by a tiny 0.025 vertical spacing, with small "
-                       "horizontal offsets at each photo count, **for visibility only**. Hover to see "
-                       "the actual unmodified score and photo number; exports use original values.")
+        st.altair_chart(alt.vconcat(*panels).resolve_scale(color="shared"), width="stretch")
+        st.caption("Lines and markers use the actual scores and photo counts. Exact overlaps remain exact; use the table to inspect coincident values.")
 
 
 def main():
@@ -1018,13 +1032,17 @@ def main():
     st.caption("Visual recognition · Viewpoint selection · Reproducible experiments")
 
     st.sidebar.header("Research lab")
-    phase = st.sidebar.radio("Workspace", ["Testing", "Research"],
+    phase = st.sidebar.radio("Workspace", ["Testing", "Research"], key="workspace",
                              help="Testing preserves existing trials. Research starts in an independent clean folder.")
     data_dir = PHASE_ROOTS[phase]
     paths = data_paths(data_dir)
-    migrate_legacy_captures(paths)
+    if phase == "Testing" and paths["trials"].exists() and not paths["captures"].exists():
+        st.warning("Legacy results have no capture manifest. Back up this workspace before recovery.")
+        if st.button("Recover legacy capture manifest from saved trial rows"):
+            migrate_legacy_captures(paths)
+            st.rerun()
     page = st.sidebar.radio("Page", ["Collection", "Evaluate & retry", "Results & graphs",
-                                       "Review predictions", "Data & exports", "Methodology"])
+                                       "Review predictions", "Data & exports", "Methodology"], key="page")
     st.sidebar.divider()
     st.sidebar.caption("Evaluators: Qwen local · Gemini 3.5 Flash Lite · NVIDIA Nemotron 3.5 Super VL")
     if phase == "Research":
@@ -1076,7 +1094,7 @@ def main():
             with cc:
                 budget = st.slider("Photographs per method", 2, 5, 5,
                                    disabled=(phase == "Research"),
-                                   help="Research always uses the preregistered 5-photo budget.")
+                                   help="Research uses the intended 5-photo budget; no preregistration is claimed.")
             with dd:
                 camera_idx = st.number_input("Camera index", 0, 10, 3, step=1)
             st.caption("Five scanning strategies (uniform, random, plus one independently guided scan "
@@ -1140,7 +1158,7 @@ def main():
             st.caption("Uniform and random photos are evaluated by all three models. "
                        "Each separately AI-guided scan is evaluated only by its guiding model. "
                        "Each checkpoint is stateless and uses only this trial's photos 1…k. "
-                       "Gemini's free account shows 500 requests/day at 15/min; NVIDIA shows up to 40/min. "
+                       "Provider quotas depend on the current account and service. "
                        "Selector calls ALSO count toward these quotas. Previously successful evaluations are not repeated.")
 
     elif page == "Results & graphs":
@@ -1161,19 +1179,17 @@ def main():
                 c2.metric("Unstructured", status_counts.get("unstructured", 0))
                 c3.metric("Failed / blocked", status_counts.get("error", 0) + status_counts.get("blocked", 0))
                 c4.metric("Human-reviewed", shown.reviewed_score.notna().sum())
-                offsets = st.checkbox("Make overlapping graph lines visible", value=True,
-                                      help="Tiny visual offsets for equal-value lines only. All true scores remain unchanged.")
                 t1, t2, t3 = st.tabs(["Recognition", "Confidence", "Observations"])
                 with t1:
                     st.markdown("**Draft name-overlap score (exploratory only)**")
-                    render_graph(shown, "provisional_score", "Draft score (0–1)", offsets)
+                    render_graph(shown, "provisional_score", "Draft score (0–1)")
                     st.caption("This is NOT measured accuracy: word overlap can mistake correct categories "
                                "for incorrect names or vice versa. Use the exported raw labels for your "
                                "final human-assisted scoring.")
                     if shown.reviewed_score.notna().any():
                         st.markdown("**Human-reviewed recognition score by model and viewpoint method**")
                         render_graph(shown.dropna(subset=["reviewed_score"]),
-                                     "reviewed_score", "Reviewed score (0–1)", offsets)
+                                     "reviewed_score", "Reviewed score (0–1)")
                     else:
                         st.info("No human-reviewed scores yet. The final study's accuracy graphs "
                                 "should use reviewed labels, not these draft scores.")
@@ -1181,13 +1197,13 @@ def main():
                     st.markdown("**Self-reported confidence (not accuracy)**")
                     shown["confidence_reported"] = pd.to_numeric(shown.confidence_reported, errors="coerce")
                     render_graph(shown.dropna(subset=["confidence_reported"]),
-                                 "confidence_reported", "Confidence (0–1)", offsets)
+                                 "confidence_reported", "Confidence (0–1)")
                     st.caption("Confidence is model-reported and uncalibrated. Do not equate it with accuracy.")
                 with t3:
                     cols = ["object_id", "method", "model", "view_number", "angle", "prediction",
                             "category", "brand", "product_family", "product_model", "evaluation_status", "provisional_score",
                             "reviewed_score", "confidence_reported", "evaluation_seconds"]
-                    st.dataframe(shown[cols], use_container_width=True, hide_index=True)
+                    st.dataframe(shown[cols], width="stretch", hide_index=True)
                 st.download_button("Download current results CSV", export_csv(shown),
                                    "sightline_results.csv", "text/csv", type="primary")
 
@@ -1279,11 +1295,15 @@ def main():
             for model in MODEL_ORDER:
                 ev = evaluations[evaluations["model"].eq(model)].copy()
                 sel = selector_history[selector_history["model"].eq(model)].copy()
-                ev_calls = pd.to_numeric(ev.get("request_attempts", pd.Series(dtype=str)),
+                attempts = attempt_history[attempt_history["model"].eq(model)]
+                logged = set(zip(attempts.trial_id, attempts.view_number, attempts.model))
+                legacy = ev.loc[pd.Series([(r.trial_id, r.view_number, r.model) not in logged
+                                          for r in ev.itertuples()], index=ev.index, dtype=bool)]
+                ev_calls = len(attempts) + pd.to_numeric(legacy.get("request_attempts", pd.Series(dtype=str)),
                                          errors="coerce").fillna(0).sum()
                 sel_calls = len(sel)  # one selector_calls.csv row for each API attempt
-                ev_tokens = pd.to_numeric(ev.get("total_tokens", pd.Series(dtype=str)),
-                                          errors="coerce").fillna(0).sum()
+                ev_tokens = (pd.to_numeric(attempts.total_tokens, errors="coerce").fillna(0).sum()
+                             + pd.to_numeric(legacy.total_tokens, errors="coerce").fillna(0).sum())
                 sel_tokens = pd.to_numeric(sel.get("total_tokens", pd.Series(dtype=str)),
                                            errors="coerce").fillna(0).sum()
                 usage_rows.append(dict(
@@ -1293,40 +1313,13 @@ def main():
                     Total_recorded_tokens=int(ev_tokens + sel_tokens),
                     Recognition_successes=int(ev.evaluation_status.isin(["ok", "unstructured"]).sum())
                 ))
-            st.dataframe(pd.DataFrame(usage_rows), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(usage_rows), hide_index=True, width="stretch")
             st.caption("Counts use saved request-attempt logs, including retry attempts when recorded. "
                        "They exclude calls made from separate scripts and any undocumented provider-side "
                        "retries. Token reporting may be incomplete for failures or legacy data. "
                        "Consult provider dashboards for the official account quota.")
         st.divider()
-        st.markdown("**Manage testing records**")
-        if not captures.empty:
-            all_trials = sorted(captures.trial_id.unique())
-            selected_trial = st.selectbox("Trial", all_trials)
-            confirm = st.checkbox("Permanently remove this trial and its images (not reversible)")
-            if st.button("Delete selected trial", disabled=not confirm):
-                remove_trials(paths, [selected_trial])
-                st.rerun()
-        if objects:
-            with st.expander("Edit an object's verified identity"):
-                oid = st.selectbox("Object to edit", list(objects))
-                with st.form("edit_truth"):
-                    new_truth = st.text_input("Ground truth", value=objects[oid]["ground_truth"])
-                    synonyms = st.text_input("Accepted full synonyms", value=", ".join(objects[oid].get("aliases", [])))
-                    if st.form_submit_button("Save identity") and new_truth.strip():
-                        objects[oid]["ground_truth"] = new_truth.strip()
-                        objects[oid]["aliases"] = [x.strip() for x in synonyms.split(",") if x.strip()]
-                        atomic_json(paths["objects"], objects)
-                        st.rerun()
-            with st.expander("Delete an object and all its trials"):
-                oid_del = st.selectbox("Object to delete", list(objects), key="delete_object")
-                confirmation = st.checkbox("I understand this permanently deletes the object, all trials, and photos")
-                if st.button("Delete object and data", disabled=not confirmation):
-                    ids = list(captures[captures.object_id.eq(oid_del)].trial_id.unique())
-                    remove_trials(paths, ids)
-                    objects.pop(oid_del, None)
-                    atomic_json(paths["objects"], objects)
-                    st.rerun()
+        st.info("Records are preserved. Review object-to-image associations before scoring. Back up the whole workspace before any offline correction; retain the original labels and an explicit correction record.")
 
     else:
         st.subheader("Methodology & safeguards")
@@ -1337,7 +1330,7 @@ def main():
 subtly speckled 150 mm 3D-printed disc. Because the disc can tilt slightly due to
 mechanical tolerances, its edge and surface are never identifying evidence. This is
 an observed hardware limitation, not a measured tilt or proof of constant wobble.
-Gemma, Cohere, SenseNova, IteraCompute and Gemini 3.8 Flash are **not** used.
+Historical scripts explored other providers; the active dashboard uses only these three model IDs.
 
 **Five scanning strategies:** uniform, seeded random, Qwen-guided, Gemini-guided and NVIDIA-guided.
 All begin at operator-confirmed 0°; the stepper has no absolute encoder. Each guiding model
@@ -1354,8 +1347,7 @@ experiments require evaluating other models' guided trials as well, with additio
 **Fair comparison:** Uniform and random scans are evaluated by all three models. Each model
 also evaluates its *own* guided scan, making 45 evaluator checkpoints per object at five views.
 The three selectors add 12 requests per object; 20 objects require ~380 requests PER model
-(including the selector) before retries. This fits Gemini's stated 500/day only if the daily
-quota has not already been used; account/provider availability still governs. Each model gets
+(including the selector) before retries. Account/provider quotas and availability must be checked before collection. Each model gets
 identical image preprocessing, though different guided methods deliberately yield different
 camera views. Selection and evaluation requests are stateless and independent.
 
