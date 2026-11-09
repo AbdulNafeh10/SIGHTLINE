@@ -25,18 +25,32 @@ The Arduino receives rotation commands from the laptop over USB. It sends the st
 
 *Underside of the printed turntable and central shaft mount.*
 
-The firmware uses the following pins:
+### Wiring
 
-| Function | Arduino pins |
+![Arduino Mega, motor driver and LCD wiring](assets/wiring.svg)
+
+*Motor driver and LCD wiring.*
+
+| Component connection | Arduino connection |
 |---|---|
-| Motor control | D8, D9, D10, D11; the Stepper library uses the order `8, 10, 9, 11` |
-| LCD RS and Enable | D22 and D23 |
-| LCD data D4–D7 | D24–D27 |
-| Serial connection | USB, 9600 baud |
+| ULN2003 IN1 | D8 |
+| ULN2003 IN2 | D9 |
+| ULN2003 IN3 | D10 |
+| ULN2003 IN4 | D11 |
+| ULN2003 power | 5V and GND |
+| Motor cable | ULN2003 motor socket |
+| LCD RS / Enable | D22 / D23 |
+| LCD D4 / D5 / D6 / D7 | D24 / D25 / D26 / D27 |
+| LCD VDD / VSS | 5V / GND |
+| LCD RW | GND |
+| LCD V0 (contrast) | Wiper of a 10kΩ potentiometer; outer terminals to 5V and GND |
+| LCD backlight anode / cathode | 5V through 220Ω / GND |
 
-The motor's coil current passes through the driver rather than the Arduino's GPIO pins. Before powering a rebuilt circuit, check the 5V supply, common ground, driver connections, and LCD power and contrast wiring. The pin table covers the firmware signals, not the full power circuit.
+The Arduino's 5V and GND rails supply the driver and LCD in this build. The motor's coil current passes through the ULN2003 rather than the GPIO pins. The potentiometer adjusts LCD contrast, while the 220Ω resistor limits the backlight current. RW is grounded because the Arduino only writes to the display.
 
-The [Cirkit Designer project](https://app.cirkitdesigner.com/project/d0be2c08-4723-48da-9a64-ce4ad795e4d4) is a wiring reference. It still needs to be checked against the assembled circuit before being used as a complete build guide.
+The Stepper library uses the constructor order `8, 10, 9, 11` to sequence the coils; the physical IN1–IN4 connections remain D8–D11. Serial communication runs at 9600 baud.
+
+The [Cirkit Designer project](https://app.cirkitdesigner.com/project/d0be2c08-4723-48da-9a64-ce4ad795e4d4) provides the component layout. The diagram above shows the electrical connections without reproducing the physical breadboard arrangement.
 
 The platform has a slight wobble. I have not measured its size or its effect on captured views. The firmware estimates rotation from motor steps, with no encoder to measure the actual angle. I need to check coupling alignment, support, and repeated returns to the same position. A reference marker on the platform would help measure these errors. A better coupling, bearing support, or encoder are possible later improvements.
 

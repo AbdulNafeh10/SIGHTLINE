@@ -1,6 +1,6 @@
 # SIGHTLINE
 
-I built SIGHTLINE to investigate whether vision-language models can choose useful viewing angles for object recognition. An object rotates on a motorized turntable while a fixed camera photographs it. The model uses the images to decide which angle to capture next.
+SIGHTLINE is an ongoing research project about a simple part of object recognition: choosing what to look at. I built a motorized turntable and camera setup to test whether a vision-language model can use the views it has already seen to choose a useful next angle.
 
 The project is currently in prototype testing. I have paused new collection while I work on turntable repeatability, camera consistency, and how recognition should be scored. The examples here are early observations, not results from a completed study.
 
@@ -10,11 +10,13 @@ The project is currently in prototype testing. I have paused new collection whil
 
 ## Research question
 
+The idea started with a limitation of single-image recognition. A model might see enough to recognize an earbud case or a toy car, but not enough to distinguish the exact product. A logo could be on the other side. Two devices could look similar from the front but have different connectors at the back. The missing information may simply be outside the photograph.
+
+I wanted to investigate the choice of image itself. Instead of giving a model a fixed set of photographs, could I let it look at the object and decide what it needed to see next? A turntable offered a practical way to test that: keep the camera in place, rotate the object, and let the model choose the next angle. This led to the research question:
+
 **Can AI-guided viewpoint selection improve fine-grained object recognition accuracy and image efficiency compared with uniform and random scanning, within individual models and across different models?**
 
-A single image can hide the detail needed to identify an object. A logo may be on the other side, or two similar products may have different ports or markings. I wanted to test whether a model could use what it has already seen to choose a more useful next view, without retraining it.
-
-The comparison needs to consider both recognition and the number of photographs used. Some objects may be identifiable from one view. For others, more images may help, add little information, or lead to a different prediction.
+The purpose is to find out when this helps and when it fails. Some objects may be identifiable from one image. Extra views might reveal a useful marking, add very little, or cause a model to change a correct interpretation. I want to compare the benefit of those views without retraining or fine-tuning the models.
 
 ## How it works
 
@@ -22,7 +24,7 @@ A 28BYJ-48 stepper motor rotates an approximately 150 mm 3D-printed platform whi
 
 The [Streamlit dashboard](dashboard.py) coordinates rotation and capture, sends images to the models, and saves photographs, predictions, selected angles, and API errors. Recognition can be run again from saved images without operating the turntable.
 
-The [hardware and methodology notes](docs/methodology.md) explain the circuit, experiment design, startup, and data handling.
+The [hardware and methodology notes](docs/methodology.md) include the wiring diagram, component roles, experiment design, and startup instructions.
 
 ## Models
 
@@ -48,15 +50,25 @@ Testing whether one model's selected views help another model is a separate comp
 
 ## Early observations
 
-The [example records](evidence/trials.csv) include a vehicle test where the same five uniform views produced different descriptions:
+An Infiniti QX80 model car gives a useful example of the images being captured and the differences between model responses.
 
-| Model | Prediction after five photographs |
-|---|---|
-| Qwen | silver metallic SUV toy model |
-| Gemini | Infiniti QX80 toy car model |
-| NVIDIA | Infiniti QX60 toy car |
+<a href="evidence/images/matchbox_2022_infiniti_qx80_uniform_20261109_122226_746eb5_view_05_290.jpg"><img src="evidence/images/matchbox_2022_infiniti_qx80_uniform_20261109_122226_746eb5_view_05_290.jpg" alt="Infiniti QX80 model on the turntable" width="400"></a>
 
-NVIDIA called the vehicle a QX80 after three images and a QX60 after five. Qwen's description stayed at the general category level. This is a useful example of why extra images and high reported confidence should not automatically be treated as better recognition.
+*Infiniti QX80 model on the turntable at 290°.*
+
+The table follows the same uniform scan as each model received more photographs. A row with three photographs means the model saw views 1–3 together, not just the third image. The wording is taken from the [saved predictions](evidence/trials.csv).
+
+| Photographs | Qwen | Gemini | NVIDIA |
+|---:|---|---|---|
+| 1 | silver SUV toy model | Toy SUV diecast model car | Toy model of a silver SUV |
+| 2 | silver toy SUV | Infiniti QX80 diecast toy car | Infiniti QX60 toy car |
+| 3 | silver toy SUV | Infiniti QX80 toy car | Infiniti QX80 toy car |
+| 4 | silver toy SUV | Infiniti QX80 toy car | Infiniti QX60 die-cast model car |
+| 5 | silver metallic SUV toy model | Infiniti QX80 toy car model | Infiniti QX60 toy car |
+
+All three started with a general SUV description. Gemini named the QX80 after the second view and kept that identification. NVIDIA moved from QX60 to QX80, then back to QX60 as more images were added. Qwen stayed at the category level throughout.
+
+That change is part of what I want to investigate. More photographs provide more evidence, but they do not guarantee a better prediction. Since these are fresh requests at each checkpoint, the sequence also does not establish that a model is remembering or defending an earlier answer. This example raises questions to test across more objects; it is not an accuracy ranking.
 
 The saved viewpoint sequences also differ: some choices cover several sides, while others make small changes around nearby angles. These examples help identify what to investigate next, but they do not establish which strategy or model performs best.
 

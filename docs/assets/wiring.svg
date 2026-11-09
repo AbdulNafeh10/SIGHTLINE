@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="780" viewBox="0 0 1260 780" role="img" aria-labelledby="title desc">
+  <title id="title">SIGHTLINE motor driver and LCD wiring</title>
+  <desc id="desc">Arduino Mega D8 to D11 connect to ULN2003 IN1 to IN4. D22 and D23 connect to LCD RS and Enable; D24 to D27 connect to LCD D4 to D7. Arduino 5V and GND supply the driver and LCD. A 10 kilohm potentiometer controls contrast, and a 220 ohm resistor limits backlight current.</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; fill: #1b3446; font-size: 17px; }
+      .heading { font-size: 25px; font-weight: 700; }
+      .part { font-size: 21px; font-weight: 700; }
+      .small { font-size: 15px; fill: #536876; }
+      .wire { fill: none; stroke: #287f89; stroke-width: 2.5; stroke-linejoin: round; }
+      .power { fill: none; stroke: #be4b45; stroke-width: 2.5; }
+      .ground { fill: none; stroke: #344956; stroke-width: 2.5; }
+      .box { fill: #f5f9fa; stroke: #668694; stroke-width: 1.7; }
+      .pin { fill: #fff; stroke: #287f89; stroke-width: 2; }
+    </style>
+    <g id="ground">
+      <path d="M0 0V12M-12 12H12M-8 18H8M-4 24H4" class="ground"/>
+    </g>
+    <g id="supply">
+      <path d="M0 0V-14M-8-6 0-14 8-6" class="power"/>
+      <text x="0" y="-24" text-anchor="middle" style="fill:#be4b45">5V</text>
+    </g>
+    <marker id="wiper" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="8" orient="auto">
+      <path d="M0 0 10 4 0 8Z" fill="#287f89"/>
+    </marker>
+  </defs>
+  <rect width="1260" height="780" fill="white"/>
+  <text x="55" y="45" class="heading">SIGHTLINE · Wiring diagram</text>
+
+  <rect x="55" y="95" width="280" height="580" rx="8" class="box"/>
+  <text x="80" y="130" class="part">Arduino Mega 2560</text>
+  <text x="80" y="155" class="small">USB serial · 9600 baud</text>
+  <text x="80" y="190" class="small">Motor control</text>
+  <g text-anchor="end">
+    <text x="315" y="212">D8</text>
+    <text x="315" y="242">D9</text>
+    <text x="315" y="272">D10</text>
+    <text x="315" y="302">D11</text>
+    <text x="315" y="392">D22</text>
+    <text x="315" y="422">D23</text>
+    <text x="315" y="452">D24</text>
+    <text x="315" y="482">D25</text>
+    <text x="315" y="512">D26</text>
+    <text x="315" y="542">D27</text>
+    <text x="315" y="602">5V</text>
+    <text x="315" y="647">GND</text>
+  </g>
+  <text x="80" y="360" class="small">LCD control and data</text>
+  <path d="M335 206H550M335 236H550M335 266H550M335 296H550" class="wire"/>
+  <path d="M335 386H550M335 416H550M335 446H550M335 476H550M335 506H550M335 536H550" class="wire"/>
+  <path d="M335 596H410V581" class="power"/>
+  <use href="#supply" x="410" y="581"/>
+  <path d="M335 641H410" class="ground"/>
+  <use href="#ground" x="410" y="641"/>
+
+  <rect x="550" y="95" width="285" height="225" rx="8" class="box"/>
+  <text x="575" y="130" class="part">ULN2003 driver</text>
+  <text x="575" y="155" class="small">Motor coil switching</text>
+  <text x="570" y="212">IN1</text>
+  <text x="570" y="242">IN2</text>
+  <text x="570" y="272">IN3</text>
+  <text x="570" y="302">IN4</text>
+  <text x="815" y="184" text-anchor="end">5V</text>
+  <text x="815" y="219" text-anchor="end">GND</text>
+  <path d="M835 178H890V163" class="power"/>
+  <use href="#supply" x="890" y="163"/>
+  <path d="M835 213H925" class="ground"/>
+  <use href="#ground" x="925" y="213"/>
+  <text x="815" y="285" text-anchor="end">Motor socket</text>
+  <path d="M835 279H1000" class="wire" style="stroke-width:4"/>
+  <text x="920" y="301" text-anchor="middle" class="small">5-wire plug</text>
+  <rect x="1000" y="195" width="205" height="125" rx="8" class="box"/>
+  <text x="1102" y="234" class="part" text-anchor="middle">28BYJ-48</text>
+  <text x="1102" y="262" text-anchor="middle">5V stepper motor</text>
+
+  <rect x="550" y="350" width="285" height="325" rx="8" class="box"/>
+  <text x="680" y="376" text-anchor="middle" class="part">LCD1602A</text>
+  <text x="575" y="650" class="small">16×2 · 4-bit mode</text>
+  <g>
+    <text x="570" y="419">Enable</text>
+    <text x="570" y="449">D4</text>
+    <text x="570" y="479">D5</text>
+    <text x="570" y="509">D6</text>
+    <text x="570" y="539">D7</text>
+    <text x="570" y="389">RS</text>
+  </g>
+  <g text-anchor="end">
+    <text x="815" y="383">VDD</text>
+    <text x="815" y="428">VSS</text>
+    <text x="815" y="473">RW</text>
+    <text x="815" y="518">K (backlight −)</text>
+    <text x="815" y="563">A (backlight +)</text>
+    <text x="815" y="623">V0 (contrast)</text>
+  </g>
+  <path d="M835 377H900V362" class="power"/>
+  <use href="#supply" x="900" y="362"/>
+  <path d="M835 422H920" class="ground"/>
+  <use href="#ground" x="920" y="422"/>
+  <path d="M835 467H920" class="ground"/>
+  <use href="#ground" x="920" y="467"/>
+  <path d="M835 512H920" class="ground"/>
+  <use href="#ground" x="920" y="512"/>
+  <path d="M835 557H960M1020 557H1110V542" class="power"/>
+  <rect x="960" y="549" width="60" height="16" fill="white" stroke="#be4b45" stroke-width="2.5"/>
+  <text x="990" y="587" text-anchor="middle">220Ω</text>
+  <use href="#supply" x="1110" y="542"/>
+
+  <path d="M1080 614V600H1160" class="power"/>
+  <path d="M1080 678V700" class="ground"/>
+  <rect x="1072" y="614" width="16" height="64" fill="white" stroke="#344956" stroke-width="2.5"/>
+  <path d="M835 617H995V646H1072" class="wire" marker-end="url(#wiper)"/>
+  <use href="#supply" x="1160" y="600"/>
+  <use href="#ground" x="1080" y="700"/>
+  <text x="1110" y="644">10kΩ</text>
+  <text x="1110" y="669" class="small">Contrast</text>
+  <text x="1110" y="689" class="small">potentiometer</text>
+
+  <g class="pin">
+    <circle cx="335" cy="206" r="3"/><circle cx="550" cy="206" r="3"/>
+    <circle cx="335" cy="236" r="3"/><circle cx="550" cy="236" r="3"/>
+    <circle cx="335" cy="266" r="3"/><circle cx="550" cy="266" r="3"/>
+    <circle cx="335" cy="296" r="3"/><circle cx="550" cy="296" r="3"/>
+    <circle cx="335" cy="386" r="3"/><circle cx="550" cy="386" r="3"/>
+    <circle cx="335" cy="416" r="3"/><circle cx="550" cy="416" r="3"/>
+    <circle cx="335" cy="446" r="3"/><circle cx="550" cy="446" r="3"/>
+    <circle cx="335" cy="476" r="3"/><circle cx="550" cy="476" r="3"/>
+    <circle cx="335" cy="506" r="3"/><circle cx="550" cy="506" r="3"/>
+    <circle cx="335" cy="536" r="3"/><circle cx="550" cy="536" r="3"/>
+  </g>
+  <text x="55" y="740" class="small">All 5V and GND symbols connect to the Arduino supply rails. LCD D0–D3 are unused.</text>
+</svg>
