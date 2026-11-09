@@ -1,4 +1,4 @@
-"""Read-only local inventory and deterministic figures; never runs inference/hardware."""
+"""Read-only inventory of local experiment data; never runs inference or hardware."""
 import argparse
 from collections import Counter, defaultdict
 import csv
@@ -10,7 +10,6 @@ from pathlib import Path
 MODELS = ["Qwen local", "Gemini cloud", "NVIDIA Nemotron"]
 OWNERS = dict(qwen_guided=MODELS[0], gemini_guided=MODELS[1], nvidia_guided=MODELS[2])
 METHODS = ["uniform", "random", *OWNERS]
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def read_rows(path):
@@ -76,32 +75,6 @@ def inventory(root):
     return output
 
 
-def figures():
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
-    captures = read_rows(ROOT / "evidence" / "captures.csv")
-    fig, axes = plt.subplots(5, 1, figsize=(8, 7), sharex=True, sharey=True, layout="constrained")
-    names = ["Uniform", "Random", "Qwen-guided", "Gemini-guided", "NVIDIA-guided"]
-    for ax, method, name in zip(axes, METHODS, names):
-        rows = sorted([r for r in captures if r["method"] == method], key=lambda r: int(r["view_number"]))
-        x = [int(r["view_number"]) for r in rows]
-        y = [int(r["angle"]) for r in rows]
-        ax.plot(x, y, marker="o", color="#245d70", linewidth=1.5)
-        for a, b in zip(x, y):
-            ax.annotate(f"{b}°", (a, b), xytext=(7, 6), textcoords="offset points", fontsize=9)
-        ax.set_ylabel(name, rotation=0, ha="right", va="center")
-        ax.set_yticks([0, 180, 360])
-        ax.set_ylim(-30, 390)
-        ax.grid(axis="y", alpha=.18)
-    axes[0].set_title("Matchbox Infiniti QX80 toy car: viewpoints", loc="left", pad=14)
-    axes[-1].set_xticks(range(1, 6))
-    axes[-1].set_xlabel("Photograph number")
-    axes[-1].set_xlim(.8, 5.5)
-    fig.savefig(ROOT / "docs" / "assets" / "viewpoint-sequences.png", dpi=180)
-    plt.close(fig)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
@@ -109,13 +82,9 @@ if __name__ == "__main__":
     audit = sub.add_parser("audit")
     audit.add_argument("root", type=Path)
     audit.add_argument("--output", type=Path)
-    sub.add_parser("figures")
     args = parser.parse_args()
-    if args.command == "figures":
-        figures()
+    result = json.dumps(inventory(args.root), indent=2) + "\n"
+    if args.output:
+        args.output.write_text(result, encoding="utf-8")
     else:
-        result = json.dumps(inventory(args.root), indent=2) + "\n"
-        if args.output:
-            args.output.write_text(result, encoding="utf-8")
-        else:
-            print(result)
+        print(result)

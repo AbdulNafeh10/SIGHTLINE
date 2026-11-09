@@ -8,6 +8,7 @@ __pycache__/
 .streamlit/secrets.toml
 study_data/
 final_study_data/
+evidence/
 scans/
 Pictures/
 legacy/
