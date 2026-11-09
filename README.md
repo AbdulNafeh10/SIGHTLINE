@@ -1,100 +1,90 @@
 # SIGHTLINE
 
-SIGHTLINE is a research prototype for studying whether vision-language models can choose useful viewpoints for fine-grained object recognition. A stationary camera photographs an object on a motorized turntable; a Streamlit application coordinates capture, model requests, and saved evidence.
+I built SIGHTLINE to investigate whether vision-language models can choose useful viewing angles for object recognition. An object rotates on a motorized turntable while a fixed camera photographs it. The model uses the images to decide which angle to capture next.
 
-**This is ongoing research. Experimental collection is paused while I address mechanical repeatability, camera control, and evaluation methodology. The retained runs are exploratory evidence, not a completed study or an accuracy ranking.**
+The project is currently in prototype testing. I have paused new collection while I work on turntable repeatability, camera consistency, and how recognition should be scored. The examples here are early observations, not results from a completed study.
 
-## Why choose the next view?
+![Arduino Mega, motor driver, LCD and turntable](docs/assets/prototype-assembly.jpg)
 
-A recognition model normally receives whichever image a camera captures. That view can hide a logo, connector, marking, or distinctive shape. I started SIGHTLINE to investigate whether a model could inspect the views already available and choose another angle that reveals useful identifying information, without retraining it.
+*Prototype setup: Arduino Mega, motor driver, LCD, and turntable.*
 
-The research question is: **Can AI-guided viewpoint selection improve fine-grained object recognition accuracy and image efficiency compared with uniform and random scanning, within individual models and across different models?**
+## Research question
 
-The purpose is to test whether it helps, when it helps, and where it fails. Some objects may need only one image. Extra images may add little, or leave a model with the same mistaken interpretation. Different models may also find different evidence useful: recognizing a category, brand, product family, and exact variant are separate achievements.
+**Can AI-guided viewpoint selection improve fine-grained object recognition accuracy and image efficiency compared with uniform and random scanning, within individual models and across different models?**
 
-![Turntable, controller, driver and LCD assembled for acquisition](docs/assets/prototype-assembly.jpg)
+A single image can hide the detail needed to identify an object. A logo may be on the other side, or two similar products may have different ports or markings. I wanted to test whether a model could use what it has already seen to choose a more useful next view, without retraining it.
 
-*Prototype assembly with the platform, object, Arduino, driver, and LCD. The phone camera is outside the frame. This photograph documents construction, not angular precision. Rotated for readability; metadata removed.*
+The comparison needs to consider both recognition and the number of photographs used. Some objects may be identifiable from one view. For others, more images may help, add little information, or lead to a different prediction.
 
-## Implemented system
+## How it works
 
-The active application is [dashboard.py](dashboard.py), with [camera.py](camera.py), [motor_controller.py](motor_controller.py), and the [LCD controller firmware](firmware/Sightline_Controller/Sightline_Controller.ino). It registers objects, collects separate scans, asks for viewpoints during guided acquisition, evaluates saved image prefixes, preserves raw responses and failures, supports retrying recognition, and exports records for review.
+A 28BYJ-48 stepper motor rotates an approximately 150 mm 3D-printed platform while the camera stays fixed. An Arduino Mega controls the motor through a ULN2003 driver. The LCD displays the current operation and commanded angle. A Samsung Galaxy S25 Ultra provides the camera feed through Plugcam.
 
-| Evaluator | Requested model ID in code and retained records | Execution |
-|---|---|---|
-| Qwen | `Qwen3-VL-4B-Instruct` | Local llama.cpp; cached GGUF is Q4_K_M |
-| Gemini | `gemini-3.5-flash-lite` | Google API |
-| NVIDIA Nemotron | `nvidia/nemotron-3.5-super-vl-120b-a12b` | NVIDIA hosted API |
+The [Streamlit dashboard](dashboard.py) coordinates rotation and capture, sends images to the models, and saves photographs, predictions, selected angles, and API errors. Recognition can be run again from saved images without operating the turntable.
 
-These are requested IDs, not independently verified immutable weight revisions. The local server's alias alone cannot prove its loaded weights. Different representations and training may produce different interpretations and view choices; model size is not an assumed accuracy ordering. Earlier provider probes are outside the active research application.
+The [hardware and methodology notes](docs/methodology.md) explain the circuit, experiment design, startup, and data handling.
 
-The hardware uses an ELEGOO Mega 2560, a 28BYJ-48 5V motor and ULN2003 driver, an approximately 150 mm printed platform and mount, and an LCD1602A display with breadboard wiring. The reported acquisition setup uses a Samsung Galaxy S25 Ultra through Plugcam and a Windows laptop with an RTX 4060 Laptop GPU. Photographs and firmware support the physical construction and control interface; phone/GPU model names and platform diameter are creator-supplied specifications. See [hardware verification and startup](docs/methodology.md#hardware-and-startup) for what remains unverified.
+## Models
 
-## Experimental design and present evidence
+| Model | Setup |
+|---|---|
+| Qwen3-VL-4B-Instruct | Runs locally through llama.cpp on my RTX 4060 laptop |
+| Gemini 3.5 Flash Lite | Accessed through Google's API |
+| NVIDIA Nemotron 3.5 Super VL | Accessed through NVIDIA's hosted API |
 
-Five strategies each receive five photographs: uniform, random, Qwen-guided, Gemini-guided, and NVIDIA-guided. Each starts at operator-aligned 0°. Uniform spacing is rounded to the 5° grid: `0, 70, 145, 215, 290`. Random scanning samples unused grid angles after 0°, with its seed recorded.
+Cost and access influenced these choices. Qwen can run on my laptop, while the free API access available to me from Google and NVIDIA makes small tests with hosted models practical. I plan runs around each account's request allowances. Check [Google's limits](https://ai.google.dev/gemini-api/docs/rate-limits) and [NVIDIA's API access](https://docs.api.nvidia.com/nim/docs/product) for the current allowances.
 
-Recognition checkpoint *k* contains photos 1 through *k* from that trial in a fresh request. Guided selection receives only its own scan's photographs and angles, without registered identity or recognition answers. All three models evaluate uniform/random baselines; each evaluates its own guided scan. **Cross-model transfer is not implemented for the three current guided methods.** Completing it requires evaluating each guided scan with the other two recognizers.
+Using different models also lets me compare how they interpret the same photographs and which views they choose. A model might recognize the category but miss the brand or exact variant. I want to understand whether useful viewpoints depend on the model selecting them.
 
-The private data audit on 9 November 2026 found:
+## Experiment design
 
-| Retained records | Testing | Research |
-|---|---:|---:|
-| Registered object IDs | 4 | 20 |
-| Registered IDs with captures | 3 | 4 |
-| Images / capture records | 64 | 95 |
-| Trials with five captured views | 11 | 16 |
-| Complete five-strategy capture batches | 1 | 3 |
-| Recognition checkpoint records marked `ok` | 138 | 90 |
-| Eligible retained checkpoints never attempted | 24 | 65 |
-| Failed recognition records | 0 | 0 |
-| Selector attempts, including failures | 12, none failed | 51, one failed |
+The intended comparison uses five photographs for each of five strategies: uniform, random, Qwen-guided, Gemini-guided, and NVIDIA-guided scanning.
 
-Capture completion is not evaluation completion. The `Research` folder name does not certify final results. All manifest paths resolved at audit time, all recorded image checksums matched, and no duplicate capture or evaluation keys were found. Neither workspace contained saved manual reviews. Older Testing prompts and logging formats differ from Research and should not be pooled. [Inventory and source digests](evidence/inventory.json) make the counts inspectable; full private datasets are excluded.
+Uniform scanning uses evenly spaced angles rounded to the turntable's 5° grid. Random scanning selects unused angles. In a guided scan, the model sees its own photographs so far and chooses the next angle.
 
-![Research collection coverage](docs/assets/collection-coverage.png)
+Recognition uses the images cumulatively: the third checkpoint includes the first three photographs. Every checkpoint is a fresh request, without earlier answers or the registered object identity. Each model evaluates the uniform and random scans, along with its own guided scan.
 
-*Counts from the retained Research manifests: 20 registrations, four IDs with captures, three complete capture batches. This is collection coverage, not a count of scientifically validated observations.*
+Testing whether one model's selected views help another model is a separate comparison that I still need to add.
 
-The public [evidence excerpt](evidence/provenance.json) contains one vehicle batch: 25 photographs, 45 cumulative recognition records, 12 selector attempts, and 45 recognition-attempt records. On the same five uniform images, Qwen returned “silver metallic SUV toy model,” Gemini “Infiniti QX80 toy car model,” and NVIDIA “Infiniti QX60 toy car.” NVIDIA's intermediate predictions changed between QX60 and QX80. These traceable disagreements illustrate category versus specific identification; they do not establish comparative accuracy. Exact product ground truth still requires an independent product reference.
+## Early observations
 
-## Run and return to the project
+The [example records](evidence/trials.csv) include a vehicle test where the same five uniform views produced different descriptions:
 
-Validated with Python **3.12.14 on Windows**, Streamlit **1.67.0**, and the pinned dependencies. Other Python versions and platforms have not been tested. The camera implementation uses Windows DirectShow.
+| Model | Prediction after five photographs |
+|---|---|
+| Qwen | silver metallic SUV toy model |
+| Gemini | Infiniti QX80 toy car model |
+| NVIDIA | Infiniti QX60 toy car |
+
+NVIDIA called the vehicle a QX80 after three images and a QX60 after five. Qwen's description stayed at the general category level. This is a useful example of why extra images and high reported confidence should not automatically be treated as better recognition.
+
+The saved viewpoint sequences also differ: some choices cover several sides, while others make small changes around nearby angles. These examples help identify what to investigate next, but they do not establish which strategy or model performs best.
+
+## Running the prototype
+
+The current setup uses Windows and Python 3.12. The camera module uses DirectShow.
 
 ```powershell
-# From the repository directory, using an installed Python 3.12:
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-$env:SIGHTLINE_PORT = "COM10"  # Replace with the actual Arduino port
+$env:SIGHTLINE_PORT = "COM10"  # Set the Arduino's actual port
 $env:GEMINI_API_KEY = "your-key"
 $env:NVIDIA_API_KEY = "your-key"
-# Optional: point to a private directory containing both historical workspaces.
-$env:SIGHTLINE_DATA_ROOT = "D:\SIGHTLINE-private"
 .\.venv\Scripts\python.exe -m streamlit run dashboard.py
 ```
 
-Use session environment variables or your usual local secret manager. [.env.example](.env.example) documents the variables; the application does **not** load `.env` files automatically. Missing cloud keys block that evaluator. Guided Research acquisition requires its selector to be available. Without `SIGHTLINE_DATA_ROOT`, new workspaces are created beside the source. The public excerpt is not automatically loaded as live Research data.
-
-Start llama.cpp separately with the cached model and vision projector; the [continuation instructions](docs/methodology.md#local-qwen-and-software-startup) give the explicit filenames, checked runtime version, and recovery procedure. On the audited machine, the generic `python` and `py -3` Store launchers failed; checks used an isolated Python 3.12 environment. Verify your interpreter before following the commands.
+Start the local Qwen server in a separate terminal:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe tools\evidence.py figures
-# Read-only inventory of private data; prints aggregates, never invokes a model:
-.\.venv\Scripts\python.exe tools\evidence.py audit D:\SIGHTLINE-private
+llama-server -hf Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M --alias Qwen3-VL-4B-Instruct --port 9931
 ```
 
-## What needs to happen next
+The [startup instructions](docs/methodology.md#startup) cover firmware, power checks, camera selection, local model files, and recovery after an interruption. [.env.example](.env.example) lists the configuration variables; the app reads environment variables directly and does not load this file automatically.
 
-The acquisition and model-request paths are implemented and supported by retained captures and responses. Software regression tests and a firmware build are verified; this review performed no physical runs or new model inference.
+## Next steps
 
-1. Characterize wobble, angular return repeatability, coupling, and object stability. Inspect support geometry and use fiducial/reference measurements before choosing mechanical changes.
-2. Fix camera focus, exposure, lighting, placement, and framing; record the actual delivered resolution and software/model configurations.
-3. Freeze prompts and an independent category/brand/family/exact-identity rubric; review labels before computing accuracy. Define repeats and balance method order.
-4. Collect the remaining controlled object trials and repeated random scans; evaluate missing checkpoints only after their inputs are accepted.
-5. Add cross-model transfer, then analyze paired object-level differences and uncertainty. Check accuracy versus image count, failure rates, and the first reviewed correct checkpoint without treating cumulative checkpoints as independent observations.
+The turntable has a slight wobble and no encoder, so its recorded angles are commands rather than independent measurements. I need to check its coupling, support, and return-to-zero repeatability before relying on repeated scans.
 
-The disc has visible/reported slight tilt and no encoder. Commanded angles are not measured angles, and shared hardware does not guarantee equal mechanical effects across strategies. Coupling inspection, bearing support, or an encoder are possible improvements, not installed features. [Methodology and continuation](docs/methodology.md) records the controls, limitations, recovery steps, and reliability changes needed to resume the work.
+I also need to control focus, exposure, lighting, and object placement; settle on a consistent scoring rubric; and collect repeated trials with balanced method order. After those checks, I can compare recognition by image count and extend the evaluation to views selected by other models.
 
-Code is [MIT licensed](LICENSE). Hardware photographs are original project images. Model weights, camera software, SDKs, and Arduino libraries retain their own licenses and service terms and are not redistributed here. Printable CAD/STL files were not present in the supplied project.
+[MIT license](LICENSE).

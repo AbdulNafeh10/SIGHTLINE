@@ -80,19 +80,7 @@ def figures():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    summary = json.loads((ROOT / "evidence" / "inventory.json").read_text())
-    research = summary["workspaces"]["final_study_data"]
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 11, "axes.spines.top": False, "axes.spines.right": False})
-    fig, ax = plt.subplots(figsize=(8, 3.2), layout="constrained")
-    labels = ["Registered object IDs", "IDs with captures", "Five-strategy capture batches"]
-    values = [research["registered_objects"], research["registered_ids_with_captures"], research["five_strategy_capture_batches"]]
-    bars = ax.barh(labels[::-1], values[::-1], color=["#407c80", "#759da4", "#b4c9cd"])
-    ax.bar_label(bars, padding=5)
-    ax.set_xlim(0, 23)
-    ax.set_xlabel("Recorded count; collection coverage only")
-    ax.set_title("Research workspace at pause", loc="left")
-    fig.savefig(ROOT / "docs" / "assets" / "collection-coverage.png", dpi=180)
-    plt.close(fig)
     captures = read_rows(ROOT / "evidence" / "captures.csv")
     fig, axes = plt.subplots(5, 1, figsize=(8, 7), sharex=True, sharey=True, layout="constrained")
     names = ["Uniform", "Random", "Qwen-guided", "Gemini-guided", "NVIDIA-guided"]
@@ -107,9 +95,9 @@ def figures():
         ax.set_yticks([0, 180, 360])
         ax.set_ylim(-30, 390)
         ax.grid(axis="y", alpha=.18)
-    axes[0].set_title("One vehicle batch: commanded viewpoint sequences", loc="left", pad=14)
+    axes[0].set_title("Viewpoint sequences from a vehicle test", loc="left", pad=14)
     axes[-1].set_xticks(range(1, 6))
-    axes[-1].set_xlabel("Photograph number (joined points show order, not continuous travel)")
+    axes[-1].set_xlabel("Photograph number")
     axes[-1].set_xlim(.8, 5.5)
     fig.savefig(ROOT / "docs" / "assets" / "viewpoint-sequences.png", dpi=180)
     plt.close(fig)
